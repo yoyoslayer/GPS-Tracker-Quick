@@ -1,0 +1,138 @@
+(version 1)
+# GPS Tracker Rev A1 custom rules (2026-09-25; RC1 history kept in comments). Widths below are ELECTRICAL minima, checked by DRC (net-class widths are only routing defaults).
+# Sources: SIMCom SIM7080G HD V1.03 sec.3.1.1 (VBAT trace > 1 mm; a plane island plus >=0.6 mm top copper is used instead of a
+# single 1 mm trace and is documented in the ledger), IPC-2221 external 1 oz: 0.3 mm ~ 0.9 A / 10 degC rise, 0.6 mm ~ 1.6 A.
+
+(rule "power_min_width"
+   (condition "A.NetClass == 'POWER'")
+   (constraint track_width (min 0.3mm)))
+
+# Rev A1: SIMCom SIM7080G HD V1.05 Table 49 "VBAT trace width > 2 mm" (island + link); BAT_PLUS trunk 1.0 mm (IPC-2152, 2 A)
+(rule "modem_vbat_min_width"
+   (condition "A.NetName == '/MODEM_VBAT'")
+   (constraint track_width (min 2.0mm)))
+
+(rule "vbat_min_width"
+   (condition "A.NetClass == 'VBAT_2A' && A.NetName != '/MODEM_VBAT'")
+   (constraint track_width (min 1.0mm)))
+
+# Rev A1.1: narrow, per-location width exceptions (found by running DRC with no exception, 2026-09-26).
+# MODEM_VBAT: every C19-C23 / D3 / L2 pad feeds the L3 VBAT island through TWO parallel 0.6 mm x 0.95 mm stubs to its vias
+# (1.2 mm total per pad; SIMCom's ">2 mm" applies to the island + trunk, which stay 2 mm).
+(rule "modem_vbat_pad_stubs"
+   (condition "A.NetName == '/MODEM_VBAT' && (A.intersectsCourtyard('C19') || A.intersectsCourtyard('C20') || A.intersectsCourtyard('C21') || A.intersectsCourtyard('C22') || A.intersectsCourtyard('C23') || A.intersectsCourtyard('D3') || A.intersectsCourtyard('L2'))")
+   (constraint track_width (min 0.6mm)))
+# BQ24074 BAT pins: 1.2 mm of 0.4 mm from the BAT_PLUS via into the 0.25 mm QFN pins (<= ~1 A; IPC-2221 ext. 0.4 mm ~1.3 A/10 C).
+(rule "bat_plus_u3_pin_feed"
+   (condition "A.NetName == 'BAT_PLUS' && A.intersectsCourtyard('U3')")
+   (constraint track_width (min 0.4mm)))
+# MAX17048 CELL/VDD sense pin: microamps.
+(rule "bat_plus_u8_sense"
+   (condition "A.NetName == 'BAT_PLUS' && A.intersectsCourtyard('U8')")
+   (constraint track_width (min 0.25mm)))
+
+# U3 (QFN-16) and U5 (WSON-10) pins are 0.25 mm wide at 0.5 mm pitch: power escapes may equal the pad width for <= 1.1 mm
+# before widening to >= 0.4 mm.
+(rule "power_fine_pitch_pin_escape"
+   (condition "A.NetClass == 'POWER' && (A.intersectsCourtyard('U3') || A.intersectsCourtyard('U5'))")
+   (constraint track_width (min 0.25mm)))
+# +3V3 supply pins of U6 (TXU0202 translator, X1SON 0.5 mm) and U7 (LIS2DW12, LGA 0.5 mm) and their C14 decoupler: < 1 mA.
+(rule "low_current_3v3_pin_feeds"
+   (condition "A.NetName == '+3V3' && (A.intersectsCourtyard('U6') || A.intersectsCourtyard('U7') || A.intersectsCourtyard('C14') || A.intersectsCourtyard('C33') || A.intersectsCourtyard('C34'))")
+   (constraint track_width (min 0.15mm)))
+
+(rule "rf_width_window"
+   (condition "A.NetClass == 'RF_50R'")
+   (constraint track_width (min 0.30mm) (max 0.32mm)))
+
+(rule "rf_pour_gap"
+   (condition "A.NetClass == 'RF_50R' && B.Type == 'Zone'")
+   (constraint clearance (min 0.20mm) (max 0.21mm)))
+
+(rule "usb_width_window"
+   (condition "A.NetClass == 'USB_90R_DIFF'")
+   (constraint track_width (min 0.26mm) (max 0.28mm)))
+
+(rule "usb_pair_gap"
+   (condition "A.NetClass == 'USB_90R_DIFF' && B.NetClass == 'USB_90R_DIFF' && A.NetName != B.NetName")
+   (constraint clearance (min 0.20mm)))
+
+# Via-in-pad: KiCad's physical_hole_clearance test skips same-net items, so a rule cannot flag a via inside its own
+# pad (verified 2026-09-06 with a 0.15 mm rule: 0 hits although U3/U5/U8 carry thermal-pad vias).  The earlier
+# "no_via_in_smd_pad" / "thermal_pad_vias_allowed" pair is therefore gone; the second one also used the KiCad 8 property
+# Pad_Name, which KiCad 10 rejects - and a rejected rule makes kicad-cli drop the ENTIRE rules file silently (found by
+# bisection, reports/rc1/phase3_dru_bisect.json).  Via-in-pad is audited by scripts/rc1_via_audit.py instead.
+
+(rule "edge_clearance"
+   (constraint edge_clearance (min 0.3mm)))
+
+(rule "silk_to_mask"
+   (condition "A.Layer == '?.Silkscreen' && B.Layer == '?.Mask'")
+   (constraint silk_clearance (min 0.15mm)))
+
+# J2 contact C5 (GND): solid zone connection is set on the pad itself (Validated library + board); a custom
+# zone_connection rule was tried first and was NOT honoured by kicad-cli's refill - see ledger SIM-C5
+
+# C20 pad 1 (GND, 100 uF bulk cap): the MODEM_VBAT feed run under the pad leaves room for one thermal spoke only;
+# the pad also has its own via + stub.  Solid connection (rule works now that the rules file loads).  Ledger PWR-VBAT-NECK
+(rule "c20_gnd_solid"
+   (condition "A.memberOfFootprint('C20') && A.Pad_Number == '1'")
+   (constraint zone_connection solid))
+
+# Rev A1: no copper of any kind under the ESP32 antenna area (Espressif HDG 1.4.7) is enforced by the keep-out zone ESP32_ANTENNA_KEEPOUT.
+
+# Rev A1: U7 (LIS2DW12 LGA-12) pads are 0.15 mm apart by footprint (ST land pattern); JLCPCB minimum is 0.127 mm.
+(rule "u7_lga_pad_pitch"
+   (condition "A.intersectsCourtyard('U7') && B.intersectsCourtyard('U7')")
+   (constraint clearance (min 0.15mm)))
+
+# Rev A1.1: single thermal spoke accepted ONLY on these five GND pads, where neighbouring pins/tracks leave room for one
+# 0.25 mm spoke: U2.51 (ESP32 module GND; module EP 49 carries 6 vias), U6.2 (TXU0202), U8.1/U8.6 (MAX17048; EP also
+# grounded by the top pour), U11.2 (TPS22919 GND, quiescent current only).  All other GND pads keep >= 2 spokes.
+# the SIM7080G ground pads get solid connections (module, no tombstoning risk; SIMCom asks for a good ground).
+(rule "u1_gnd_solid"
+   (condition "A.memberOfFootprint('U1') && A.NetName == 'GND'")
+   (constraint zone_connection solid))
+(rule "single_spoke_small_gnd_pads"
+   (condition "A.Type == 'Pad' && ((A.memberOfFootprint('U2') && A.Pad_Number == '51') || (A.memberOfFootprint('U6') && A.Pad_Number == '2') || (A.memberOfFootprint('U8') && (A.Pad_Number == '1' || A.Pad_Number == '6')) || (A.memberOfFootprint('U11') && A.Pad_Number == '2') || (A.memberOfFootprint('U12') && A.Pad_Number == '2'))")
+   (constraint min_resolved_spokes 1))
+
+# Rev A1.1 (2026-09-26): USB differential pairs.  Nets are named <base>_P/_N so KiCad pairs them (inDiffPair); a net class
+# alone does not create a pair.  Each series-element segment is its own pair, so each rule names one pair (a skew rule whose
+# condition matches several pairs compares all of their nets with each other).
+# Gap window around the 0.2 mm (0.27 mm wide) 90-ohm edge-coupled geometry of the USB_90R_DIFF class (JLC 7628 calculator).
+(rule "modem_usb_hs_gap"
+   (condition "A.inDiffPair('/MODEM_USB')")
+   (constraint diff_pair_gap (min 0.18mm) (opt 0.2mm) (max 0.25mm)))
+# ESP32 FS pair: coupled-gap window reported as WARNING (review item) - see esp_usb_fs_skew_* below.
+(rule "esp_usb_fs_gap"
+   (severity warning)
+   (condition "A.inDiffPair('/ESP_USB*')")
+   (constraint diff_pair_gap (min 0.18mm) (opt 0.2mm) (max 0.25mm)))
+
+# SIM7080G USB is 2.0 High-Speed (SIMCom HD V1.03 sec. 3.4: 90 ohm +/-10 %).  Intra-pair skew target 0.5 mm (~3 ps, <0.2 % UI at
+# 480 Mb/s).  Uncoupled length: the U1 pads are 1.1 mm apart and the J6 header pins 2.54 mm, so both ends need a fan-out;
+# 5 mm total covers those two fan-outs (KiCad measures ~2.5 mm at the 1.1 mm-pitch pads + ~1.8 mm at the 2.54 mm header);
+# 5 mm uncoupled is ~30 ps, electrically short against the ~500 ps HS edge.
+(rule "modem_usb_hs_skew"
+   (condition "A.inDiffPair('/MODEM_USB')")
+   (constraint skew (max 0.5mm)))
+(rule "modem_usb_hs_uncoupled"
+   (condition "A.inDiffPair('/MODEM_USB')")
+   (constraint diff_pair_uncoupled (max 5mm)))
+
+# ESP32-C3 USB Serial/JTAG is Full-Speed only (12 Mb/s; edges 4-20 ns, source-jitter budget +/-3.5 ns).  Length skew is kept
+# visible as a WARNING (review item, not a pass/fail limit) per segment; see REV_A2_REPORT (03_Engineering/Reports) for the measured values.
+(rule "esp_usb_fs_skew_conn"
+   (severity warning)
+   (condition "A.inDiffPair('/ESP_USB_CONN')")
+   (constraint skew (max 1mm)))
+(rule "esp_usb_fs_skew_esd"
+   (severity warning)
+   (condition "A.inDiffPair('/ESP_USB_ESD')")
+   (constraint skew (max 1mm)))
+(rule "esp_usb_fs_skew_main"
+   (severity warning)
+   (condition "A.inDiffPair('/ESP_USB')")
+   (constraint skew (max 1mm)))
+
